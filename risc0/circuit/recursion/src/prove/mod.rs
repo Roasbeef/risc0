@@ -82,6 +82,9 @@ pub trait RecursionProver {
 pub fn recursion_prover(hashfn: &str) -> Result<Box<dyn RecursionProver>> {
     cfg_if! {
         if #[cfg(feature = "cuda")] {
+            if std::env::var_os("RISC0_FORCE_CPU_PROVER").is_some() {
+                return self::hal::cpu::recursion_prover(hashfn);
+            }
             self::hal::cuda::recursion_prover(hashfn)
         // } else if #[cfg(any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios"))] {
         // self::hal::metal::recursion_prover(hashfn)

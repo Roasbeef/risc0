@@ -45,6 +45,9 @@ pub trait SegmentProver {
 pub fn segment_prover() -> Result<Box<dyn SegmentProver>> {
     cfg_if! {
         if #[cfg(feature = "cuda")] {
+            if std::env::var_os("RISC0_FORCE_CPU_PROVER").is_some() {
+                return self::hal::cpu::segment_prover();
+            }
             self::hal::cuda::segment_prover()
         // } else if #[cfg(any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios"))] {
         // self::hal::metal::segment_prover(hashfn)
