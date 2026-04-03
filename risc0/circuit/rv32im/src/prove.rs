@@ -26,7 +26,6 @@ mod preflight_dual;
 use std::ptr::NonNull;
 
 use anyhow::Result;
-use cfg_if::cfg_if;
 use risc0_circuit_rv32im_sys::*;
 
 pub use preflight::{PreflightContext, SegmentContext};
@@ -92,16 +91,34 @@ impl Drop for ProverContext {
 }
 
 pub fn segment_prover(po2: usize) -> Result<ProverContext> {
-    cfg_if! {
-        if #[cfg(feature = "cuda")] {
-            let segment_prover = ProverContext::new_cuda(po2)?;
-        } else if #[cfg(any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios"))] {
-            let segment_prover = ProverContext::new_metal(po2)?;
-        } else {
-            let segment_prover = ProverContext::new_cpu(po2)?;
+    let force_cpu = std::env::var_os("RISC0_FORCE_CPU_PROVER").is_some();
+    #[cfg(feature = "cuda")]
+    {
+        if force_cpu {
+            return ProverContext::new_cpu(po2);
         }
+        return ProverContext::new_cuda(po2);
     }
-    Ok(segment_prover)
+
+    #[cfg(all(
+        not(feature = "cuda"),
+        any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios")
+    ))]
+    {
+        if force_cpu {
+            return ProverContext::new_cpu(po2);
+        }
+        return ProverContext::new_metal(po2);
+    }
+
+    #[cfg(all(
+        not(feature = "cuda"),
+        not(any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios"))
+    ))]
+    {
+        let _ = force_cpu;
+        ProverContext::new_cpu(po2)
+    }
 }
 
 #[cfg(test)]

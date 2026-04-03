@@ -26,7 +26,6 @@ pub mod zkr;
 use std::{collections::VecDeque, fmt::Debug, rc::Rc};
 
 use anyhow::Result;
-use cfg_if::cfg_if;
 use risc0_core::scope;
 use risc0_zkp::{
     adapter::{CircuitInfo, PROOF_SYSTEM_INFO},
@@ -81,16 +80,40 @@ pub trait RecursionProver {
 }
 
 pub fn recursion_prover(hashfn: &str) -> Result<Box<dyn RecursionProver>> {
-    cfg_if! {
-        if #[cfg(feature = "dual")] {
-            self::hal::dual::recursion_prover(hashfn)
-        } else if #[cfg(feature = "cuda")] {
-            self::hal::cuda::recursion_prover(hashfn)
-        } else if #[cfg(any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios"))] {
-            self::hal::metal::recursion_prover(hashfn)
-        } else {
-            self::hal::cpu::recursion_prover(hashfn)
+    let force_cpu = std::env::var_os("RISC0_FORCE_CPU_PROVER").is_some();
+    #[cfg(feature = "dual")]
+    {
+        return self::hal::dual::recursion_prover(hashfn);
+    }
+
+    #[cfg(feature = "cuda")]
+    {
+        if force_cpu {
+            return self::hal::cpu::recursion_prover(hashfn);
         }
+        return self::hal::cuda::recursion_prover(hashfn);
+    }
+
+    #[cfg(all(
+        not(feature = "dual"),
+        not(feature = "cuda"),
+        any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios")
+    ))]
+    {
+        if force_cpu {
+            return self::hal::cpu::recursion_prover(hashfn);
+        }
+        return self::hal::metal::recursion_prover(hashfn);
+    }
+
+    #[cfg(all(
+        not(feature = "dual"),
+        not(feature = "cuda"),
+        not(any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios"))
+    ))]
+    {
+        let _ = force_cpu;
+        self::hal::cpu::recursion_prover(hashfn)
     }
 }
 
