@@ -2,6 +2,8 @@
 #       Only use this if you'd like to build manually
 
 ROOT_DIR:=$(strip $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
+REPO_ROOT:=$(strip $(shell cd $(ROOT_DIR)../.. && pwd -P))
+PLATFORM_RUSTFLAGS:=--remap-path-prefix=$(REPO_ROOT)=/risc0-src --remap-path-prefix=$(HOME)/.cargo/registry/src=/cargo/registry/src
 
 ifeq ($(OS),Windows_NT)
 $(error Windows not supported)
@@ -27,7 +29,7 @@ default: execute
 
 .PHONY: platform
 platform:
-	cargo +risc0 rustc -p zkvm-platform --target riscv32im-risc0-zkvm-elf --lib --crate-type staticlib --release --target-dir ./guest/out/platform
+	RUSTFLAGS="$(PLATFORM_RUSTFLAGS) $${RUSTFLAGS}" cargo +risc0 rustc -p zkvm-platform --target riscv32im-risc0-zkvm-elf --lib --crate-type staticlib --release --target-dir ./guest/out/platform
 
 # Regenerate the header file. Assumes cbindgen installed locally.
 .PHONY: headers
