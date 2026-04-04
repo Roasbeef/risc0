@@ -31,6 +31,10 @@ default: execute
 platform:
 	RUSTFLAGS="$(PLATFORM_RUSTFLAGS) $${RUSTFLAGS}" cargo +risc0 rustc -p zkvm-platform --target riscv32im-risc0-zkvm-elf --lib --crate-type staticlib --release --target-dir ./guest/out/platform
 
+.PHONY: platform-standalone
+platform-standalone:
+	${ROOT_DIR}build-platform-standalone.sh
+
 # Regenerate the header file. Assumes cbindgen installed locally.
 .PHONY: headers
 headers:
