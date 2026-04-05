@@ -53,10 +53,22 @@ gcc:
 guest: gcc platform
 	${ROOT_DIR}riscv32im-${MACHINE}/bin/riscv32-unknown-elf-gcc -nostartfiles ./guest/main.c -o ./guest/out/main -L${ROOT_DIR}guest/out/platform/riscv32im-risc0-zkvm-elf/release -lzkvm_platform -T ./guest/riscv32im-risc0-zkvm-elf.ld
 
+.PHONY: guest-standalone
+guest-standalone: gcc platform-standalone
+	${ROOT_DIR}riscv32im-${MACHINE}/bin/riscv32-unknown-elf-gcc -nostartfiles ./guest/main.c -o ./guest/out/main -L${ROOT_DIR}guest/out/platform/riscv32im-risc0-zkvm-elf/release -lzkvm_platform -T ./guest/riscv32im-risc0-zkvm-elf.ld
+
 .PHONY: execute
 execute: guest
 	RISC0_DEV_MODE=true cargo run -p c-guest-host
 
+.PHONY: execute-standalone
+execute-standalone: guest-standalone
+	RISC0_DEV_MODE=true cargo run -p c-guest-host
+
 .PHONY: prove
 prove: guest
+	cargo run -p c-guest-host
+
+.PHONY: prove-standalone
+prove-standalone: guest-standalone
 	cargo run -p c-guest-host

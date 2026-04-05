@@ -22,6 +22,8 @@ union u32_cast {
 };
 
 int main() {
+  env_init();
+
   // TODO introduce entropy into memory image (for zk)
   sha256_state* hasher = init_sha256();
 
