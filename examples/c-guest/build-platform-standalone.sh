@@ -34,6 +34,7 @@ GIT_REV="${PLATFORM_GIT_REV:-$(git -C "${REPO_ROOT}" rev-parse HEAD)}"
 
 mkdir -p "${TMPDIR}/src" "${OUT_DIR}"
 cp "${ROOT_DIR}/platform/src/lib.rs" "${TMPDIR}/src/lib.rs"
+cp "${REPO_ROOT}/Cargo.lock" "${TMPDIR}/Cargo.lock"
 
 cat > "${TMPDIR}/Cargo.toml" <<EOF
 [package]
@@ -45,6 +46,9 @@ edition = "2024"
 risc0-binfmt = { git = "${REMOTE_URL}", rev = "${GIT_REV}", package = "risc0-binfmt", default-features = false }
 risc0-zkp = { git = "${REMOTE_URL}", rev = "${GIT_REV}", package = "risc0-zkp", default-features = false }
 risc0-zkvm-platform = { git = "${REMOTE_URL}", rev = "${GIT_REV}", package = "risc0-zkvm-platform", features = ["rust-runtime", "export-syscalls"] }
+
+[profile.release]
+lto = true
 EOF
 
 BUILD_RUSTFLAGS="--remap-path-prefix=${TMPDIR}=/standalone-src --remap-path-prefix=${HOME}/.cargo/registry/src=/cargo/registry/src -C metadata=standalone ${RUSTFLAGS:-}"

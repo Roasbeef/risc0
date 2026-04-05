@@ -50,6 +50,15 @@ _start:
 
 const ERR_FREED: &[u8] = b"error: sha256_state has not been initialized or has already been freed";
 
+/// Initialize the guest-side runtime pieces that the C example relies on.
+///
+/// Rust guests get this through the normal platform entrypoint. The C example
+/// uses its own `_start`, so it must explicitly initialize the heap first.
+#[unsafe(no_mangle)]
+pub extern "C" fn env_init() {
+    unsafe { risc0_zkvm_platform::heap::init() };
+}
+
 /// C wrapper for guest sha256 implementation.
 ///
 /// This is used in the guest to generate any sha256
