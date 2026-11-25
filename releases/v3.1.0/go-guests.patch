@@ -1,0 +1,348 @@
+diff --git a/docs/go-zkvm-notes.md b/docs/go-zkvm-notes.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..7c42dc567cbc62a2edfd1bc38efc79b3a8a7df72
+--- /dev/null
++++ b/docs/go-zkvm-notes.md
+@@ -0,0 +1,43 @@
++# Go / TinyGo zkVM Notes
++
++This note records the parts of the risc0 tree that the sibling Go/TinyGo guest
++workflow depends on.
++
++## Main Artifacts Used By `go-zkvm`
++
++### Platform Archive
++
++The reusable guest-side syscall veneer comes from the C guest example flow:
++
++- `examples/c-guest`
++- `examples/c-guest/guest/out/platform/riscv32im-risc0-zkvm-elf/release/libzkvm_platform.a`
++
++This archive is what the newer TinyGo `zkvm-platform` target links against.
++
++### Kernel ELF
++
++The current packaged guest flow uses:
++
++- `risc0/zkos/v1compat/elfs/v1compat.elf`
++
++The TinyGo user ELF and this kernel half need to come from the same current
++risc0 lane.
++
++### Rust Host / Prover Crates
++
++The current local Go guest host uses:
++
++- `risc0/zkvm`
++
++with the in-process prove path enabled so the host is not silently delegating to
++an older external `r0vm`.
++
++## Prover backends on v3.1.0
++
++The upstream release selects CUDA for a CUDA-enabled build and CPU otherwise.
++This includes CPU proving on Apple Silicon. Setting `RISC0_FORCE_CPU_PROVER=1`
++in a CUDA build selects CPU for both segment and recursion proving.
++
++Build and verify receipts with the v3.1.0 host. If selecting the external
++prover explicitly, install the matching `r0vm` 3.1.0. Regenerate receipts
++created with previous circuits before relying on them.
+diff --git a/examples/Cargo.lock b/examples/Cargo.lock
+index f8cc9562fc5cb614fa6fe11a6b4b4c7ae41a6821..a303b028a5fdda622938e22b3b48e5d1f3944a26 100644
+--- a/examples/Cargo.lock
++++ b/examples/Cargo.lock
+@@ -914,7 +914,9 @@ name = "c-guest-host"
+ version = "0.1.0"
+ dependencies = [
+  "anyhow",
++ "risc0-binfmt",
+  "risc0-build",
++ "risc0-zkos-v1compat",
+  "risc0-zkvm",
+  "rzup",
+  "tracing-subscriber 0.3.19",
+diff --git a/examples/c-guest/Makefile b/examples/c-guest/Makefile
+index 6c641a6141b0d3595da0b109f89fea44b817a9bc..2232dd5ad0165bdb67a2595576f7ed2d698ff2fc 100644
+--- a/examples/c-guest/Makefile
++++ b/examples/c-guest/Makefile
+@@ -2,6 +2,8 @@
+ #       Only use this if you'd like to build manually
+ 
+ ROOT_DIR:=$(strip $(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
++REPO_ROOT:=$(strip $(shell cd $(ROOT_DIR)../.. && pwd -P))
++PLATFORM_RUSTFLAGS:=--remap-path-prefix=$(REPO_ROOT)=/risc0-src --remap-path-prefix=$(HOME)/.cargo/registry/src=/cargo/registry/src
+ 
+ ifeq ($(OS),Windows_NT)
+ $(error Windows not supported)
+@@ -27,7 +29,11 @@ default: execute
+ 
+ .PHONY: platform
+ platform:
+-	cargo +risc0 rustc -p zkvm-platform --target riscv32im-risc0-zkvm-elf --lib --crate-type staticlib --release --target-dir ./guest/out/platform
++	RUSTFLAGS="$(PLATFORM_RUSTFLAGS) $${RUSTFLAGS}" cargo +risc0 rustc -p zkvm-platform --target riscv32im-risc0-zkvm-elf --lib --crate-type staticlib --release --target-dir ./guest/out/platform
++
++.PHONY: platform-standalone
++platform-standalone:
++	${ROOT_DIR}build-platform-standalone.sh
+ 
+ # Regenerate the header file. Assumes cbindgen installed locally.
+ .PHONY: headers
+@@ -47,10 +53,22 @@ gcc:
+ guest: gcc platform
+ 	${ROOT_DIR}riscv32im-${MACHINE}/bin/riscv32-unknown-elf-gcc -nostartfiles ./guest/main.c -o ./guest/out/main -L${ROOT_DIR}guest/out/platform/riscv32im-risc0-zkvm-elf/release -lzkvm_platform -T ./guest/riscv32im-risc0-zkvm-elf.ld
+ 
++.PHONY: guest-standalone
++guest-standalone: gcc platform-standalone
++	${ROOT_DIR}riscv32im-${MACHINE}/bin/riscv32-unknown-elf-gcc -nostartfiles ./guest/main.c -o ./guest/out/main -L${ROOT_DIR}guest/out/platform/riscv32im-risc0-zkvm-elf/release -lzkvm_platform -T ./guest/riscv32im-risc0-zkvm-elf.ld
++
+ .PHONY: execute
+ execute: guest
+ 	RISC0_DEV_MODE=true cargo run -p c-guest-host
+ 
++.PHONY: execute-standalone
++execute-standalone: guest-standalone
++	RISC0_DEV_MODE=true cargo run -p c-guest-host
++
+ .PHONY: prove
+ prove: guest
+ 	cargo run -p c-guest-host
++
++.PHONY: prove-standalone
++prove-standalone: guest-standalone
++	cargo run -p c-guest-host
+diff --git a/examples/c-guest/README.md b/examples/c-guest/README.md
+index 888a71736fbb369a1047190de9ba2ee150d699d9..47bd92d3c6bbbb1cf042be5feb6d02f04adef1e0 100644
+--- a/examples/c-guest/README.md
++++ b/examples/c-guest/README.md
+@@ -1,9 +1,15 @@
+ # C Guest Program Example
+ 
+-> Warning: This example is experimental, and has not been extensively tested
++> Warning: this example is still experimental, but the current `make execute`,
++> `make prove`, `make execute-standalone`, and `make prove-standalone` paths
++> were all revalidated on the current latest lane in this fork.
+ 
+ This example is a template of a basic program written in C.
+ 
++The current host flow packages the built guest ELF together with
++`v1compat.elf` before handing it to the executor/prover. On current `main`,
++passing the raw ELF directly is no longer sufficient.
++
+ ## Quick Start
+ 
+ First, make sure [rustup] is installed.
+@@ -23,6 +29,26 @@ or to prove:
+ make prove
+ ```
+ 
++For the deterministic published-commit archive path that avoids checkout-path
++drift in `libzkvm_platform.a`, prefer:
++
++```bash
++make execute-standalone
++```
++
++or:
++
++```bash
++make prove-standalone
++```
++
++Those targets build the platform archive through `make platform-standalone`
++first, then compile and run the example guest against that archive. Keep the
++older `make execute` / `make prove` path for local workspace iteration only.
++
++If you want the most reproducible published-commit path, prefer the standalone
++targets.
++
+ For more info on the instructions run, see the [Makefile](./Makefile).
+ 
+ [rustup]: https://rustup.rs
+diff --git a/examples/c-guest/build-platform-standalone.sh b/examples/c-guest/build-platform-standalone.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..56ef8e04bdf7a5833115356448e536af96a09d57
+--- /dev/null
++++ b/examples/c-guest/build-platform-standalone.sh
+@@ -0,0 +1,57 @@
++#!/usr/bin/env bash
++
++set -euo pipefail
++
++ROOT_DIR=$(cd "$(dirname "$0")" && pwd -P)
++REPO_ROOT=$(cd "${ROOT_DIR}/../.." && pwd -P)
++TMPDIR=$(mktemp -d)
++OUT_DIR="${ROOT_DIR}/guest/out/platform/riscv32im-risc0-zkvm-elf/release"
++TARGET_DIR="${TMPDIR}/out"
++
++cleanup() {
++  rm -rf "${TMPDIR}"
++}
++
++trap cleanup EXIT
++
++# The port changes the local C veneer. Its three Rust dependencies come
++# from the unmodified, published release and are fetchable from a fresh clone.
++REMOTE_URL="${PLATFORM_GIT_URL:-https://github.com/risc0/risc0.git}"
++GIT_REV="${PLATFORM_GIT_REV:-22c5fb90522cb4d9427d4af6c05e747d20be2b7f}"
++
++mkdir -p "${TMPDIR}/src" "${OUT_DIR}"
++cp "${ROOT_DIR}/platform/src/lib.rs" "${TMPDIR}/src/lib.rs"
++cp "${REPO_ROOT}/Cargo.lock" "${TMPDIR}/Cargo.lock"
++
++cat > "${TMPDIR}/Cargo.toml" <<EOF
++[package]
++name = "zkvm-platform-standalone"
++version = "0.1.0"
++edition = "2021"
++
++[dependencies]
++risc0-binfmt = { git = "${REMOTE_URL}", rev = "${GIT_REV}", package = "risc0-binfmt", default-features = false }
++risc0-zkp = { git = "${REMOTE_URL}", rev = "${GIT_REV}", package = "risc0-zkp", default-features = false }
++risc0-zkvm-platform = { git = "${REMOTE_URL}", rev = "${GIT_REV}", package = "risc0-zkvm-platform", features = ["rust-runtime", "export-syscalls"] }
++
++[profile.release]
++lto = true
++EOF
++
++BUILD_RUSTFLAGS="--remap-path-prefix=${TMPDIR}=/standalone-src --remap-path-prefix=${CARGO_HOME:-${HOME}/.cargo}/registry/src=/cargo/registry/src -C metadata=standalone ${RUSTFLAGS:-}"
++
++echo "building standalone platform archive from ${REMOTE_URL} @ ${GIT_REV}" >&2
++
++GIT_LFS_SKIP_SMUDGE=1 CARGO_NET_GIT_FETCH_WITH_CLI=true RUSTFLAGS="${BUILD_RUSTFLAGS}" cargo +risc0 rustc \
++  --manifest-path "${TMPDIR}/Cargo.toml" \
++  --target riscv32im-risc0-zkvm-elf \
++  --lib \
++  --crate-type staticlib \
++  --release \
++  --target-dir "${TARGET_DIR}"
++
++cp \
++  "${TARGET_DIR}/riscv32im-risc0-zkvm-elf/release/libzkvm_platform_standalone.a" \
++  "${OUT_DIR}/libzkvm_platform.a"
++
++echo "wrote ${OUT_DIR}/libzkvm_platform.a" >&2
+diff --git a/examples/c-guest/guest/main.c b/examples/c-guest/guest/main.c
+index 42beb855ea3db26d0c475ab9c40fa0e66c0bee29..d50bfae709125bf355661eba5534abf3ff9f6840 100644
+--- a/examples/c-guest/guest/main.c
++++ b/examples/c-guest/guest/main.c
+@@ -22,6 +22,8 @@ union u32_cast {
+ };
+ 
+ int main() {
++  env_init();
++
+   // TODO introduce entropy into memory image (for zk)
+   sha256_state* hasher = init_sha256();
+ 
+diff --git a/examples/c-guest/guest/platform.h b/examples/c-guest/guest/platform.h
+index a29f37980a3b205a078220a8ff48b2dc20c01fe9..f39ee674a722bb6d086440812f19c72939bd0fed 100644
+--- a/examples/c-guest/guest/platform.h
++++ b/examples/c-guest/guest/platform.h
+@@ -254,6 +254,8 @@ typedef uint32_t Digest[DIGEST_WORDS];
+ 
+ 
+ 
++void env_init(void);
++
+ struct sha256_state *init_sha256(void);
+ 
+ /**
+diff --git a/examples/c-guest/host/Cargo.toml b/examples/c-guest/host/Cargo.toml
+index d12b8f78f7d0c646ec952e9720ebfa2fa434afd2..a92f3f0b7f9e3c2f82248e505fa7429d986529ab 100644
+--- a/examples/c-guest/host/Cargo.toml
++++ b/examples/c-guest/host/Cargo.toml
+@@ -5,7 +5,9 @@ edition = "2021"
+ 
+ [dependencies]
+ anyhow = "1.0"
+-risc0-zkvm = { path = "../../../risc0/zkvm" }
++risc0-binfmt = { path = "../../../risc0/binfmt" }
++risc0-zkos-v1compat = { path = "../../../risc0/zkos/v1compat" }
++risc0-zkvm = { path = "../../../risc0/zkvm", default-features = false, features = ["prove"] }
+ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ 
+ [build-dependencies]
+diff --git a/examples/c-guest/host/src/main.rs b/examples/c-guest/host/src/main.rs
+index e0e5aee1c7c429eefe40705144c8cac3c6a57f44..5a6aea7191fef026c34015ae0f3dca1e9c6f81fa 100644
+--- a/examples/c-guest/host/src/main.rs
++++ b/examples/c-guest/host/src/main.rs
+@@ -14,6 +14,8 @@
+ 
+ use std::fs;
+ 
++use risc0_binfmt::ProgramBinary;
++use risc0_zkos_v1compat::V1COMPAT_ELF;
+ use risc0_zkvm::{compute_image_id, default_prover, ExecutorEnv};
+ 
+ fn main() -> anyhow::Result<()> {
+@@ -22,10 +24,11 @@ fn main() -> anyhow::Result<()> {
+         .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
+         .init();
+ 
+-    // Load built gcc program and compute it's image ID.
++    // Load the built user ELF, package it with v1compat, and compute its image ID.
+     // TODO have the image ID be calculated at compile time, to avoid potential vulnerabilities
+     let consensus_elf = fs::read("./guest/out/main")?;
+-    let consensus_id = compute_image_id(&consensus_elf)?;
++    let consensus_binary = ProgramBinary::new(&consensus_elf, V1COMPAT_ELF).encode();
++    let consensus_id = compute_image_id(&consensus_binary)?;
+ 
+     let env = ExecutorEnv::builder()
+         .write_slice(&7u32.to_le_bytes())
+@@ -34,7 +37,7 @@ fn main() -> anyhow::Result<()> {
+     let prover = default_prover();
+ 
+     // Produce a receipt by proving the specified ELF binary.
+-    let receipt = prover.prove(env, &consensus_elf)?.receipt;
++    let receipt = prover.prove(env, &consensus_binary)?.receipt;
+ 
+     // The default serialization for u32 is to (de)serialize as le bytes, so this will match
+     // the format committed from the guest.
+diff --git a/examples/c-guest/platform/src/lib.rs b/examples/c-guest/platform/src/lib.rs
+index 33fe48f86284124377ec8fd7a5b31408178fe33e..a2c1dae2bec69d287b753832a59329caa97bc790 100644
+--- a/examples/c-guest/platform/src/lib.rs
++++ b/examples/c-guest/platform/src/lib.rs
+@@ -49,6 +49,15 @@ _start:
+ 
+ const ERR_FREED: &[u8] = b"error: sha256_state has not been initialized or has already been freed";
+ 
++/// Initialize the guest-side runtime pieces that the C example relies on.
++///
++/// Rust guests get this through the normal platform entrypoint. The C example
++/// uses its own `_start`, so it must explicitly initialize the heap first.
++#[unsafe(no_mangle)]
++pub extern "C" fn env_init() {
++    unsafe { risc0_zkvm_platform::heap::init() };
++}
++
+ /// C wrapper for guest sha256 implementation.
+ ///
+ /// This is used in the guest to generate any sha256
+diff --git a/risc0/circuit/recursion/src/prove/mod.rs b/risc0/circuit/recursion/src/prove/mod.rs
+index 995047f686401deb7fc2e9f8ad5303c6f0f52e62..f3a56006819917aa56f8131ee2361954109dabca 100644
+--- a/risc0/circuit/recursion/src/prove/mod.rs
++++ b/risc0/circuit/recursion/src/prove/mod.rs
+@@ -82,6 +82,9 @@ pub trait RecursionProver {
+ pub fn recursion_prover(hashfn: &str) -> Result<Box<dyn RecursionProver>> {
+     cfg_if! {
+         if #[cfg(feature = "cuda")] {
++            if std::env::var_os("RISC0_FORCE_CPU_PROVER").is_some() {
++                return self::hal::cpu::recursion_prover(hashfn);
++            }
+             self::hal::cuda::recursion_prover(hashfn)
+         // } else if #[cfg(any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios"))] {
+         // self::hal::metal::recursion_prover(hashfn)
+diff --git a/risc0/circuit/rv32im/src/prove/mod.rs b/risc0/circuit/rv32im/src/prove/mod.rs
+index 29b9e1694fc4b435ecb534252099b1ddd1063c09..54cdedc991c8170f88a17ad6446e3823ae06abde 100644
+--- a/risc0/circuit/rv32im/src/prove/mod.rs
++++ b/risc0/circuit/rv32im/src/prove/mod.rs
+@@ -45,6 +45,9 @@ pub trait SegmentProver {
+ pub fn segment_prover() -> Result<Box<dyn SegmentProver>> {
+     cfg_if! {
+         if #[cfg(feature = "cuda")] {
++            if std::env::var_os("RISC0_FORCE_CPU_PROVER").is_some() {
++                return self::hal::cpu::segment_prover();
++            }
+             self::hal::cuda::segment_prover()
+         // } else if #[cfg(any(all(target_os = "macos", target_arch = "aarch64"), target_os = "ios"))] {
+         // self::hal::metal::segment_prover(hashfn)
